@@ -5,7 +5,9 @@ requests, operators fulfil them by assigning recorded episodes, clients accept o
 the delivery.
 
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy 2, Alembic, PostgreSQL 16
-- **Frontend:** a small dependency-free single-page app (vanilla JS), served by the same process
+- **Frontend:** a small dependency-free single-page app (vanilla JS), served by the same process.
+  It covers the client and operator flows from the brief. Import, analytics and user admin
+  are API/CLI features: use them from the interactive docs at `/docs` ("Authorize" with a token from `/api/auth/login`).
 - **Stretch item chosen:** real-time. Operators see new requests and status changes live (SSE).
 
 Design notes, trade-offs and answers to the brief's questions are in [NOTES.md](NOTES.md).
@@ -83,7 +85,6 @@ What the tests cover (most of the domain rules):
 
 ## Importing episodes
 
-- UI: log in as an operator and open **Import episodes**.
 - API: `POST /api/episodes/import` (multipart `file`).
 - CLI: `python -m app.cli import-episodes path/to/export.csv [--summary]`
 
@@ -91,6 +92,21 @@ The response reports `imported`, `unchanged` (already present from an earlier ru
 `skipped` with counts per reason, and every skipped row with its line number, reason and a detail
 message, plus non-fatal warnings. How each kind of messy data is handled is described in
 [NOTES.md](NOTES.md#import-rules).
+
+## Analytics at 5 million episodes
+
+`GET /api/analytics` does all aggregation in SQL: `GROUP BY` day and robot, `COUNT` by status,
+`percentile_cont` for the median, and `ORDER BY … LIMIT 5`. Only the aggregated rows reach Python.
+Measured on PostgreSQL 16 with 200k episodes: a one-month range takes about 13 ms (index scan on
+`(recorded_at, robot_id)`), and a full year about 220 ms (a sequential scan, since the range is the
+whole table).
+
+At 5M episodes a month-long range still takes tens of milliseconds, but query time grows with the
+number of rows in range, so a year would take roughly 5 s. The median is computed over requests,
+not episodes, so it stays cheap. The fix is a small daily rollup table
+(`day, robot_id, task_name, quality, count`) updated by the importer, which is the only writer of
+episodes. That turns year queries into a few thousand rows. Monthly partitioning on `recorded_at`
+would help further. Details are in [NOTES.md](NOTES.md#5-scale).
 
 ## API overview
 

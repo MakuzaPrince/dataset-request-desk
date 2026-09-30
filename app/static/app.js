@@ -13,11 +13,6 @@ const esc = (v) =>
 const isOps = () => state.user && (state.user.role === "operator" || state.user.role === "admin");
 const isClient = () => state.user && state.user.role === "client";
 const fmtDate = (iso) => (iso ? new Date(iso + (iso.endsWith("Z") ? "" : "Z")).toLocaleString() : "");
-const fmtDuration = (secs) => {
-  if (secs == null) return "–";
-  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = Math.round(secs % 60);
-  return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`;
-};
 const badge = (value) => `<span class="badge ${esc(value)}">${esc(String(value).replace("_", " "))}</span>`;
 
 function toast(message) {
@@ -80,8 +75,6 @@ function logout() {
 function renderNav() {
   const links = [["#/requests", "Requests"]];
   if (isClient()) links.push(["#/new", "New request"]);
-  if (isOps()) links.push(["#/import", "Import episodes"], ["#/analytics", "Analytics"]);
-  if (state.user.role === "admin") links.push(["#/users", "Users"]);
   const current = location.hash.split("/").slice(0, 2).join("/");
   document.getElementById("nav").innerHTML = links
     .map(([href, label]) => `<a href="${href}" class="${current === href ? "active" : ""}">${label}</a>`)
@@ -333,160 +326,6 @@ async function renderPicker(req) {
   await load();
 }
 
-// ---------- operations views ----------
-
-function viewImport() {
-  $view.innerHTML = `
-    <form class="panel" id="import-form">
-      <h2>Import episodes</h2>
-      <p class="muted">Upload a CSV export from the recording system. Re-importing the same file is safe: existing episodes are left untouched.</p>
-      <label>CSV file <input type="file" name="file" accept=".csv,text/csv" required></label>
-      <div class="error" id="import-error"></div>
-      <button type="submit" id="import-btn">Import</button>
-    </form>
-    <div id="import-report"></div>`;
-  const form = document.getElementById("import-form");
-  form.addEventListener("submit", guarded(document.getElementById("import-error"), async () => {
-    const btn = document.getElementById("import-btn");
-    btn.disabled = true;
-    try {
-      const r = await api("/api/episodes/import", { method: "POST", form: new FormData(form) });
-      document.getElementById("import-report").innerHTML = `
-        <div class="panel">
-          <h3>Import report</h3>
-          <dl>
-            <dt>Rows read</dt><dd>${r.rows_read}</dd>
-            <dt>Imported</dt><dd>${r.imported}</dd>
-            <dt>Already present (unchanged)</dt><dd>${r.unchanged}</dd>
-            <dt>Skipped</dt><dd>${r.skipped}</dd>
-          </dl>
-          ${Object.keys(r.skipped_by_reason).length ? `<h4>Skipped by reason</h4><table><tbody>${Object.entries(r.skipped_by_reason)
-            .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}</tbody></table>` : ""}
-          ${r.skipped_rows.length ? `<h4>Skipped rows${r.details_truncated ? " (first 1000)" : ""}</h4><div class="scroll"><table>
-            <thead><tr><th>Line</th><th>Episode</th><th>Reason</th><th>Detail</th></tr></thead>
-            <tbody>${r.skipped_rows.map((s) => `<tr><td>${s.line}</td><td>${esc(s.episode_id) || "–"}</td><td>${esc(s.reason)}</td><td>${esc(s.detail)}</td></tr>`).join("")}</tbody>
-          </table></div>` : ""}
-          ${r.warnings.length ? `<h4>Warnings</h4><table><tbody>${r.warnings.map((w) =>
-            `<tr><td>${w.line}</td><td>${esc(w.episode_id)}</td><td>${esc(w.detail)}</td></tr>`).join("")}</tbody></table>` : ""}
-        </div>`;
-    } finally {
-      btn.disabled = false;
-    }
-  }));
-}
-
-async function viewAnalytics() {
-  const params = new URLSearchParams(location.hash.split("?")[1] || "");
-  const today = new Date().toISOString().slice(0, 10);
-  const start = params.get("start") || new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
-  const end = params.get("end") || today;
-  $view.innerHTML = `
-    <form class="panel row" id="range-form">
-      <label>From <input type="date" name="start" value="${esc(start)}" required></label>
-      <label>To <input type="date" name="end" value="${esc(end)}" required></label>
-      <button type="submit">Update</button>
-    </form>
-    <div class="error" id="analytics-error"></div>
-    <div id="analytics"></div>`;
-  document.getElementById("range-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    location.hash = `#/analytics?${new URLSearchParams(new FormData(e.target))}`;
-  });
-  let a;
-  try {
-    a = await api(`/api/analytics?${new URLSearchParams({ start, end })}`);
-  } catch (err) {
-    document.getElementById("analytics-error").textContent = err.message;
-    return;
-  }
-  // Pivot day x robot rows into a table for readability.
-  const robots = [...new Set(a.episodes_per_day_per_robot.map((r) => r.robot_id))].sort();
-  const days = new Map();
-  a.episodes_per_day_per_robot.forEach((r) => {
-    if (!days.has(r.day)) days.set(r.day, {});
-    days.get(r.day)[r.robot_id] = r.episodes;
-  });
-  const f = a.request_fulfilment;
-  document.getElementById("analytics").innerHTML = `
-    <div class="grid2">
-      <div class="panel">
-        <h3>Request fulfilment</h3>
-        <p class="muted">Requests submitted in this range.</p>
-        <table><tbody>${Object.entries(f.by_status).map(([s, n]) => `<tr><td>${badge(s)}</td><td>${n}</td></tr>`).join("")}
-          <tr><th>Total</th><th>${f.total}</th></tr></tbody></table>
-        <p>Median time from submitted to first delivery: <strong>${fmtDuration(f.median_seconds_to_delivery)}</strong>
-          <span class="muted">(${f.delivered_count} delivered)</span></p>
-      </div>
-      <div class="panel">
-        <h3>Top tasks by good episodes</h3>
-        ${a.top_tasks_by_good_episodes.length ? `<table><tbody>${a.top_tasks_by_good_episodes
-          .map((t, i) => `<tr><td>${i + 1}. ${esc(t.task_name)}</td><td>${t.good_episodes}</td></tr>`).join("")}</tbody></table>`
-          : '<p class="muted">No good episodes in this range.</p>'}
-      </div>
-    </div>
-    <div class="panel">
-      <h3>Episodes recorded per day, per robot</h3>
-      ${days.size ? `<div class="scroll"><table>
-        <thead><tr><th>Day</th>${robots.map((r) => `<th>${esc(r)}</th>`).join("")}<th>Total</th></tr></thead>
-        <tbody>${[...days].map(([day, counts]) => `<tr><td>${esc(day)}</td>${robots.map((r) => `<td>${counts[r] || 0}</td>`).join("")}
-          <td><strong>${Object.values(counts).reduce((x, y) => x + y, 0)}</strong></td></tr>`).join("")}</tbody>
-      </table></div>` : '<p class="muted">No episodes recorded in this range.</p>'}
-    </div>`;
-}
-
-async function viewUsers() {
-  const users = await api("/api/users");
-  const roles = ["client", "operator", "admin"];
-  $view.innerHTML = `
-    <div class="panel">
-      <h2>Users</h2>
-      <table>
-        <thead><tr><th>Name</th><th>Email</th><th>Organisation</th><th>Role</th><th>Active</th></tr></thead>
-        <tbody>${users.map((u) => {
-          const self = u.id === state.user.id;
-          return `<tr>
-            <td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(u.organisation) || "–"}</td>
-            <td><select data-role="${u.id}" ${self ? "disabled" : ""}>${roles.map((r) => `<option ${r === u.role ? "selected" : ""}>${r}</option>`).join("")}</select></td>
-            <td><input type="checkbox" data-active="${u.id}" ${u.is_active ? "checked" : ""} ${self ? "disabled" : ""}></td>
-          </tr>`;
-        }).join("")}</tbody>
-      </table>
-      <div class="error" id="users-error"></div>
-    </div>
-    <form class="panel" id="user-form">
-      <h3>Create user</h3>
-      <div class="row">
-        <label>Name <input name="name" required></label>
-        <label>Email <input name="email" type="email" required></label>
-      </div>
-      <div class="row">
-        <label>Password <input name="password" type="password" minlength="8" required></label>
-        <label>Role <select name="role">${roles.map((r) => `<option>${r}</option>`).join("")}</select></label>
-        <label>Organisation <input name="organisation"></label>
-      </div>
-      <div class="error" id="user-error"></div>
-      <button type="submit">Create user</button>
-    </form>`;
-  const usersError = document.getElementById("users-error");
-  const patch = (id, body) => guarded(usersError, async () => {
-    await api(`/api/users/${id}`, { method: "PATCH", body });
-    toast("User updated");
-    await viewUsers();
-  });
-  $view.querySelectorAll("select[data-role]").forEach((el) =>
-    el.addEventListener("change", (e) => patch(el.dataset.role, { role: el.value })(e)));
-  $view.querySelectorAll("input[data-active]").forEach((el) =>
-    el.addEventListener("change", (e) => patch(el.dataset.active, { is_active: el.checked })(e)));
-  const form = document.getElementById("user-form");
-  form.addEventListener("submit", guarded(document.getElementById("user-error"), async () => {
-    const data = Object.fromEntries(new FormData(form));
-    if (!data.organisation) delete data.organisation;
-    await api("/api/users", { method: "POST", body: data });
-    toast("User created");
-    await viewUsers();
-  }));
-}
-
 // ---------- live updates (operators) ----------
 // fetch() streaming instead of EventSource so the token travels in a header, not the URL.
 
@@ -565,9 +404,6 @@ async function route() {
     if (detail) return await viewRequestDetail(Number(detail[1]));
     if (path === "/requests") return await viewRequests();
     if (path === "/new" && isClient()) return viewNewRequest();
-    if (path === "/import" && isOps()) return viewImport();
-    if (path === "/analytics" && isOps()) return await viewAnalytics();
-    if (path === "/users" && state.user.role === "admin") return await viewUsers();
     location.hash = "#/requests";
   } catch (err) {
     if (err.status === 401) return;
