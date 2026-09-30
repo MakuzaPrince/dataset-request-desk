@@ -35,9 +35,9 @@ MAX_DURATION_SECONDS = 3600
 BATCH_SIZE = 1000
 MAX_REPORTED_ROWS = 1000
 EPISODE_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
-# Naive formats seen in the export; all are interpreted as UTC. Slashed dates are day-first.
-DATE_FORMATS = ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S")
-MISSING_MARKERS = {"", "n/a", "na", "null", "none", "-"}
+# The only non-ISO format in the export; read day-first (the sample has 14/08/2026).
+DAY_FIRST_FORMAT = "%d/%m/%Y %H:%M"
+MISSING_MARKERS = {"", "n/a", "null"}
 EPISODES = Episode.__table__
 
 
@@ -67,17 +67,15 @@ def _blank(value: str) -> bool:
 
 
 def parse_datetime(raw: str) -> datetime:
+    """Parse ISO-8601 (T or space separator, optional offset) or DD/MM/YYYY HH:MM, as naive UTC."""
     raw = raw.strip()
-    for fmt in DATE_FORMATS:
-        try:
-            return datetime.strptime(raw, fmt)
-        except ValueError:
-            pass
     try:
-        # ISO-8601 with an offset or 'Z' -> convert to naive UTC.
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(raw)
     except ValueError:
-        raise RowError("invalid_recorded_at", f"unrecognised date '{raw}'") from None
+        try:
+            return datetime.strptime(raw, DAY_FIRST_FORMAT)
+        except ValueError:
+            raise RowError("invalid_recorded_at", f"unrecognised date '{raw}'") from None
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt

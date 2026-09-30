@@ -10,8 +10,6 @@ from app.security import decode_token
 
 _bearer = HTTPBearer(auto_error=False)
 
-OPS_ROLES = frozenset({Role.operator, Role.admin})
-
 
 def _unauthorized(message: str) -> HTTPException:
     return HTTPException(status.HTTP_401_UNAUTHORIZED, message, headers={"WWW-Authenticate": "Bearer"})
