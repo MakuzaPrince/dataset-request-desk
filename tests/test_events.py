@@ -4,6 +4,7 @@ import threading
 from datetime import date, timedelta
 
 from app.events import Broadcaster, broadcaster
+from app.routers.stream import stream as stream_endpoint
 
 
 def test_broadcaster_delivers_across_threads():
@@ -41,3 +42,29 @@ def test_request_changes_are_published(client, h, monkeypatch):
         {"type": "request_created", "request_id": rid, "status": "submitted"},
         {"type": "request_status_changed", "request_id": rid, "status": "in_progress"},
     ]
+
+
+
+def test_stream_releases_db_session_and_unsubscribes_on_disconnect():
+    """An SSE connection can stay open for hours, so it must not pin a pooled DB connection."""
+
+    class FakeSession:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class DisconnectedRequest:
+        async def is_disconnected(self):
+            return True
+
+    async def scenario():
+        db = FakeSession()
+        response = await stream_endpoint(DisconnectedRequest(), object(), db)
+        assert db.closed
+        assert broadcaster.subscriber_count == 1
+        chunks = [chunk async for chunk in response.body_iterator]
+        return chunks
+
+    assert asyncio.run(scenario()) == ["retry: 3000\n\n"]
+    assert broadcaster.subscriber_count == 0
