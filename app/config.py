@@ -26,6 +26,8 @@ class Settings:
     secret_key: str = field(default_factory=_secret_key)
     token_ttl_minutes: int = field(default_factory=lambda: _env_int("TOKEN_TTL_MINUTES", 480))
     log_level: str = field(default_factory=lambda: os.getenv("LOG_LEVEL", "INFO"))
+    # Cost factor 12 is the bcrypt default; tests lower it to keep the suite fast.
+    bcrypt_rounds: int = field(default_factory=lambda: _env_int("BCRYPT_ROUNDS", 12))
     max_upload_bytes: int = field(default_factory=lambda: _env_int("MAX_UPLOAD_BYTES", 200 * 1024 * 1024))
 
 

@@ -7,11 +7,11 @@ from app.config import settings
 
 ALGORITHM = "HS256"
 # Used when the email is unknown, so login takes the same time either way.
-_DUMMY_HASH = bcrypt.hashpw(b"not-a-real-password", bcrypt.gensalt())
+_DUMMY_HASH = bcrypt.hashpw(b"not-a-real-password", bcrypt.gensalt(settings.bcrypt_rounds))
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(settings.bcrypt_rounds)).decode()
 
 
 def verify_password(password: str, password_hash: str | None) -> bool:

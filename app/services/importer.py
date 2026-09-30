@@ -38,6 +38,7 @@ EPISODE_ID_RE = re.compile(r"^[A-Z0-9][A-Z0-9_-]{0,63}$")
 # Naive formats seen in the export; all are interpreted as UTC. Slashed dates are day-first.
 DATE_FORMATS = ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S")
 MISSING_MARKERS = {"", "n/a", "na", "null", "none", "-"}
+EPISODES = Episode.__table__
 
 
 class RowError(Exception):
@@ -183,9 +184,9 @@ class Report:
 def _insert_ignore(db: Session):
     dialect = db.get_bind().dialect.name
     if dialect == "postgresql":
-        return postgresql.insert(Episode)
+        return postgresql.insert(EPISODES)
     if dialect == "sqlite":
-        return sqlite.insert(Episode)
+        return sqlite.insert(EPISODES)
     raise RuntimeError(f"unsupported database dialect: {dialect}")
 
 
@@ -193,9 +194,13 @@ def _flush(db: Session, batch: list[tuple[int, ParsedRow]], report: Report, run_
     if not batch:
         return
     ids = [row.episode_id for _, row in batch]
+    c = EPISODES.c
     existing = {
-        e.episode_id: (e.robot_id, e.task_name, e.recorded_at, e.duration_seconds, e.operator_name, e.quality)
-        for e in db.scalars(select(Episode).where(Episode.episode_id.in_(ids)))
+        row[0]: tuple(row[1:])
+        for row in db.execute(
+            select(c.episode_id, c.robot_id, c.task_name, c.recorded_at, c.duration_seconds, c.operator_name, c.quality)
+            .where(c.episode_id.in_(ids))
+        )
     }
     to_insert: list[tuple[int, ParsedRow]] = []
     for line, row in batch:
@@ -209,26 +214,28 @@ def _flush(db: Session, batch: list[tuple[int, ParsedRow]], report: Report, run_
 
     if to_insert:
         now = utcnow()
+        # Core executemany with RETURNING: SQLAlchemy batches it into multi-row INSERTs
+        # ("insertmanyvalues") while reusing one cached compiled statement.
         stmt = (
             _insert_ignore(db)
-            .values([
-                {
-                    "episode_id": r.episode_id,
-                    "robot_id": r.robot_id,
-                    "task_name": r.task_name,
-                    "recorded_at": r.recorded_at,
-                    "duration_seconds": r.duration_seconds,
-                    "operator_name": r.operator_name,
-                    "quality": r.quality,
-                    "import_run_id": run_id,
-                    "created_at": now,
-                }
-                for _, r in to_insert
-            ])
             .on_conflict_do_nothing(index_elements=["episode_id"])
-            .returning(Episode.episode_id)
+            .returning(EPISODES.c.episode_id)
         )
-        inserted = set(db.scalars(stmt).all())
+        params = [
+            {
+                "episode_id": r.episode_id,
+                "robot_id": r.robot_id,
+                "task_name": r.task_name,
+                "recorded_at": r.recorded_at,
+                "duration_seconds": r.duration_seconds,
+                "operator_name": r.operator_name,
+                "quality": r.quality,
+                "import_run_id": run_id,
+                "created_at": now,
+            }
+            for _, r in to_insert
+        ]
+        inserted = set(db.connection().execute(stmt, params).scalars().all())
         for line, row in to_insert:
             if row.episode_id in inserted:
                 report.imported += 1
