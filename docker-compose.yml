@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: desk
+      POSTGRES_USER: desk
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-desk-local-only}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U desk -d desk"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://desk:${POSTGRES_PASSWORD:-desk-local-only}@db:5432/desk
+      # Local-development default only. Set a real value (e.g. in .env) anywhere else.
+      SECRET_KEY: ${SECRET_KEY:-local-dev-secret-change-me-0123456789abcdef}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SEED_USERS: ${SEED_USERS:-true}
+      SEED_EPISODES: ${SEED_EPISODES:-true}
+    ports:
+      - "${APP_PORT:-8000}:8000"
+
+volumes:
+  pgdata:
