@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local databases and generated data
+*.db
+*.db-journal
+seed/episodes_large.csv
+
+# Environment / secrets
+.env
+
+# Editor, OS and assistant files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.claude/
+CLAUDE.md
+
+# Test brief (not part of the deliverable)
+WORK_TASK.md
+seed/README.md
